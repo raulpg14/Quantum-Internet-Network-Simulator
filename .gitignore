@@ -9,3 +9,5 @@ results/
 dist/
 build/
 *.egg-info/
+notebooks/*_executed.ipynb
+*.pdf
