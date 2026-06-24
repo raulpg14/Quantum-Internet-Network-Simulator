@@ -12,6 +12,7 @@ from qcn.engine.config import (
     POISSON_DENSITY,
     SIM_MODE_DISTRIBUTION,
     SIM_MODE_EVOLUTION,
+    NETWORK_TYPE_SBQI,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,14 +37,19 @@ def _compute_path_metrics(G: nx.Graph) -> tuple[float, float]:
 
 
 def _log_func(x: np.ndarray, a: float, b: float) -> np.ndarray:
-    """Logarithmic model: l = a * ln(N) + b"""
+    """Logarithmic model for SBQI: l = a * ln(N) + b"""
     return a * np.log(x) + b
+
+
+def _power_func(x: np.ndarray, b: float, alpha: float) -> np.ndarray:
+    """Power law model for OFBQI: l = b * N^alpha (PRL 2020)"""
+    return b * np.power(x, alpha)
 
 
 def _fit_logarithmic(x: list, y: list) -> dict | None:
     """
-    Fit a logarithmic curve l = a * ln(N) + b to the given data.
-    Returns a dict with fit parameters and formula string, or None if fit fails.
+    Fit logarithmic curve l = a*ln(N) + b for SBQI.
+    PRX Quantum 2021: SBQI displays small-world property, l ~ ln(N).
     """
     try:
         x_arr = np.array(x, dtype=float)
@@ -51,14 +57,34 @@ def _fit_logarithmic(x: list, y: list) -> dict | None:
         popt, _ = curve_fit(_log_func, x_arr, y_arr)
         sign = "+" if popt[1] >= 0 else "-"
         return {
-            "a": popt[0],
-            "b": popt[1],
+            "type":    "logarithmic",
+            "a":       popt[0],
+            "b":       popt[1],
             "formula": f"l = {popt[0]:.4f} * ln(N) {sign} {abs(popt[1]):.4f}"
         }
     except Exception as e:
-        logger.warning("Logarithmic curve fit failed: %s", e)
+        logger.warning("Logarithmic fit failed: %s", e)
         return None
 
+def _fit_powerlaw(x: list, y: list, density: float) -> dict | None:
+    """
+    Fit power law curve l = b * N^alpha for OFBQI.
+    PRL 2020: OFBQI has NO small-world property, l ~ sqrt(N).
+    Expected: alpha ~ 0.5, b ~ 5e-5 / density.
+    """
+    try:
+        x_arr = np.array(x, dtype=float)
+        y_arr = np.array(y, dtype=float)
+        popt, _ = curve_fit(_power_func, x_arr, y_arr, p0=[5e-5, 0.5])
+        return {
+            "type":    "powerlaw",
+            "b":       popt[0],
+            "alpha":   popt[1],
+            "formula": f"l = {popt[0]:.6f} * N^{popt[1]:.4f}"
+        }
+    except Exception as e:
+        logger.warning("Power law fit failed: %s", e)
+        return None
 
 def run_simulation(data: dict) -> dict:
     """
@@ -210,7 +236,12 @@ def run_simulation(data: dict) -> dict:
                 results_path.append(float(np.mean(temp_path)))
                 results_diam.append(float(np.mean(temp_diam)))
 
-            fit_params = _fit_logarithmic(results_n, results_path)
+            # SBQI: logarithmic fit l ~ ln(N) — small-world (PRX Quantum 2021)
+            # OFBQI: power law fit l ~ N^alpha — no small-world (PRL 2020)
+            if net_type == NETWORK_TYPE_SBQI:
+                fit_params = _fit_logarithmic(results_n, results_path)
+            else:
+                fit_params = _fit_powerlaw(results_n, results_path, real_density)
 
             return {
                 "success":        True,

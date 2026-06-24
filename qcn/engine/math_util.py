@@ -60,18 +60,17 @@ def connectivity_distribution(G, k):
     p = ((1 / (k * sigma * np.sqrt(2*np.pi)))) ** ((-(np.log(k) - (mu ** 2))**2) / (2 * (sigma ** 2)))
     return p
 """
-def poisson_fit(k_values):
-    # Densidad
-    density = POISSON_DENSITY
-    
-    # Parámetro lambda de la distribución de Poisson
-    A = POISSON_A
-    
-    # Calcula los valores de la PMF de Poisson para los k_values dados
-    poisson_values = poisson.pmf(k_values, A * density)
 
-    # Devuelve los valores de la PMF de Poisson
-    return poisson_values
+def poisson_fit(k_values: np.ndarray, density: float) -> np.ndarray:
+    """
+    Analytic Poisson fit for OFBQI degree distribution.
+    From PRL 2020 eq.(2): P(k) = e^(-Aρ) * (Aρ)^k / k!
+    where A = 5.2e4 is a network constant and ρ is the node density.
+    The Poisson parameter λ = A·ρ is determined analytically, not fitted.
+    """
+    lambda_val = POISSON_A * density
+    return poisson.pmf(k_values, lambda_val)
+
 
 def log_normal_fit(k_values, n_connections, num_nodes):
     # Calcula el valor medio de conexiones por nodo
