@@ -86,12 +86,31 @@ def save_run(result: dict, duration_s: float = 0.0) -> int:
                     "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
                     (run_id, "degree_prob", float(pk), int(k))
                 )
+            # Summary metrics for distribution mode
+            if result.get("mean_degree") is not None:
+                conn.execute(
+                    "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                    (run_id, "mean_degree", float(result["mean_degree"]), None)
+                )
+            if result.get("clustering") is not None:
+                conn.execute(
+                    "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                    (run_id, "clustering", float(result["clustering"]), None)
+                )
+            if result.get("ng_ratio") is not None:
+                conn.execute(
+                    "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                    (run_id, "ng_ratio", float(result["ng_ratio"]), None)
+                )
 
         elif mode == "evolution":
-            for n, l, d in zip(
+            for n, l, d, c, k, ng in zip(
                 result.get("x_nodes", []),
                 result.get("y_path", []),
                 result.get("y_diameter", []),
+                result.get("y_clustering", []),
+                result.get("y_mean_degree", []),
+                result.get("y_ng_ratio", []),
             ):
                 conn.execute(
                     "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
@@ -101,7 +120,20 @@ def save_run(result: dict, duration_s: float = 0.0) -> int:
                     "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
                     (run_id, "diameter", float(d), int(n))
                 )
+                conn.execute(
+                    "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                    (run_id, "clustering", float(c), int(n))
+                )
+                conn.execute(
+                    "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                    (run_id, "mean_degree", float(k), int(n))
+                )
+                conn.execute(
+                    "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                    (run_id, "ng_ratio", float(ng), int(n))
+                )
 
+            # Path length fit params
             fp = result.get("fit_params")
             if fp:
                 fit_type = fp.get("type", "logarithmic")
@@ -124,10 +156,32 @@ def save_run(result: dict, duration_s: float = 0.0) -> int:
                         (run_id, "fit_alpha", float(fp["alpha"]), None)
                     )
 
+            # Diameter fit params
+            fp_diam = result.get("fit_params_diam")
+            if fp_diam:
+                fit_type = fp_diam.get("type", "logarithmic")
+                if fit_type == "logarithmic":
+                    conn.execute(
+                        "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                        (run_id, "diam_fit_a", float(fp_diam["a"]), None)
+                    )
+                    conn.execute(
+                        "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                        (run_id, "diam_fit_b", float(fp_diam["b"]), None)
+                    )
+                elif fit_type == "powerlaw":
+                    conn.execute(
+                        "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                        (run_id, "diam_fit_b", float(fp_diam["b"]), None)
+                    )
+                    conn.execute(
+                        "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                        (run_id, "diam_fit_alpha", float(fp_diam["alpha"]), None)
+                    )
+
         conn.commit()
     logger.info("Run saved: id=%d type=%s mode=%s", run_id, result.get("type"), mode)
     return run_id
-
 
 def get_runs(network_type: str = None, sim_mode: str = None) -> list[dict]:
     """
@@ -160,12 +214,12 @@ def get_metrics(run_id: int, metric: str = None) -> list[dict]:
     if metric:
         query += " AND metric = ?"
         params.append(metric)
-    query += " ORDER BY step_n"
+    # Order by step_n with NULLs last so summary metrics appear after per-step data
+    query += " ORDER BY step_n IS NULL, step_n"
 
     with _get_connection() as conn:
         rows = conn.execute(query, params).fetchall()
     return [dict(row) for row in rows]
-
 
 def export_csv(run_id: int, output_path: Path = None) -> Path:
     """

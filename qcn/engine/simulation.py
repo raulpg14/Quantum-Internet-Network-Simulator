@@ -3,7 +3,6 @@ import networkx as nx
 import logging
 from scipy.optimize import curve_fit
 
-
 from qcn.engine.network import Network
 from qcn.engine.config import (
     DEFAULT_FALLBACK_RADIUS,
@@ -38,6 +37,22 @@ def _compute_path_metrics(G: nx.Graph) -> tuple[float, float]:
         return 0.0, 0.0
     return nx.average_shortest_path_length(G), nx.diameter(G)
 
+
+def _compute_clustering(G: nx.Graph) -> float:
+    """Compute average clustering coefficient. Returns 0 for graphs with < 2 nodes."""
+    if len(G) < 2:
+        return 0.0
+    return nx.average_clustering(G)
+
+
+def _compute_mean_degree(G: nx.Graph) -> float:
+    """Compute average degree ⟨k⟩ of the graph."""
+    if len(G) == 0:
+        return 0.0
+    degrees = [d for _, d in G.degree()]
+    return float(np.mean(degrees))
+
+
 def _fit_logarithmic(x: list, y: list) -> dict | None:
     """
     Fit logarithmic curve l = a*ln(N) + b for SBQI.
@@ -58,6 +73,7 @@ def _fit_logarithmic(x: list, y: list) -> dict | None:
         logger.warning("Logarithmic fit failed: %s", e)
         return None
 
+
 def _fit_powerlaw(x: list, y: list, density: float) -> dict | None:
     """
     Fit power law curve l = b * N^alpha for OFBQI.
@@ -77,6 +93,7 @@ def _fit_powerlaw(x: list, y: list, density: float) -> dict | None:
     except Exception as e:
         logger.warning("Power law fit failed: %s", e)
         return None
+
 
 def run_simulation(data: dict) -> dict:
     """
@@ -122,6 +139,8 @@ def run_simulation(data: dict) -> dict:
         if sim_mode == SIM_MODE_DISTRIBUTION:
             radius = input_param_val
             last_G, last_pos, last_degrees = None, None, []
+            clustering_vals = []
+            mean_degree_vals = []
 
             for rep in range(mc_reps):
                 if is_cancelled():
@@ -133,9 +152,15 @@ def run_simulation(data: dict) -> dict:
                 net.connect_nodes(net_type)
 
                 raw_degrees = [node.connections for node in net.nodes.values()]
+                G_temp, pos_temp = net.to_networkx()
+
+                # Compute per-rep metrics on giant component
+                G_calc = _get_giant_component(G_temp)
+                clustering_vals.append(_compute_clustering(G_calc))
+                mean_degree_vals.append(_compute_mean_degree(G_temp))
 
                 if rep == mc_reps - 1:
-                    last_G, last_pos = net.to_networkx()
+                    last_G, last_pos = G_temp, pos_temp
                     last_degrees = raw_degrees
 
             if last_degrees:
@@ -147,8 +172,9 @@ def run_simulation(data: dict) -> dict:
             else:
                 dist_x, dist_y = [], []
 
-            final_area  = np.pi * (radius ** 2)
-            density_val = input_nodes_val / final_area if final_area > 0 else 0.0
+            final_area   = np.pi * (radius ** 2)
+            density_val  = input_nodes_val / final_area if final_area > 0 else 0.0
+            ng_ratio     = len(_get_giant_component(last_G)) / len(last_G) if last_G else 0.0
 
             return {
                 "success":       True,
@@ -161,6 +187,9 @@ def run_simulation(data: dict) -> dict:
                 "final_radius":  radius,
                 "final_n":       input_nodes_val,
                 "density_val":   density_val,
+                "mean_degree":   float(np.mean(mean_degree_vals)),
+                "clustering":    float(np.mean(clustering_vals)),
+                "ng_ratio":      ng_ratio,
                 "seed":          seed,
             }
 
@@ -178,11 +207,14 @@ def run_simulation(data: dict) -> dict:
             node_incr   = int(data.get('rad_incr', DEFAULT_NODE_INCREMENT))
             steps_n     = [input_nodes_val + i * node_incr for i in range(steps_count)]
 
-            results_n    = []
-            results_path = []
-            results_diam = []
-            last_G, last_pos = None, None
-            final_r_viz = 0.0
+            results_n           = []
+            results_path        = []
+            results_diam        = []
+            results_clustering  = []
+            results_mean_degree = []
+            results_ng_ratio    = []
+            last_G, last_pos    = None, None
+            final_r_viz         = 0.0
 
             for idx, n_count in enumerate(steps_n):
                 if is_cancelled():
@@ -195,8 +227,11 @@ def run_simulation(data: dict) -> dict:
                     else DEFAULT_FALLBACK_RADIUS
                 )
 
-                temp_path = []
-                temp_diam = []
+                temp_path        = []
+                temp_diam        = []
+                temp_clustering  = []
+                temp_mean_degree = []
+                temp_ng_ratio    = []
 
                 for rep in range(mc_reps):
                     if is_cancelled():
@@ -212,13 +247,19 @@ def run_simulation(data: dict) -> dict:
                     G_temp, pos_temp = net.to_networkx()
 
                     if len(G_temp) > 0:
-                        G_calc = _get_giant_component(G_temp)
-                        l, d   = _compute_path_metrics(G_calc)
+                        G_calc   = _get_giant_component(G_temp)
+                        l, d     = _compute_path_metrics(G_calc)
+                        c        = _compute_clustering(G_calc)
+                        k_mean   = _compute_mean_degree(G_temp)
+                        ng_ratio = len(G_calc) / len(G_temp)
                     else:
-                        l, d = 0.0, 0.0
+                        l, d, c, k_mean, ng_ratio = 0.0, 0.0, 0.0, 0.0, 0.0
 
                     temp_path.append(l)
                     temp_diam.append(d)
+                    temp_clustering.append(c)
+                    temp_mean_degree.append(k_mean)
+                    temp_ng_ratio.append(ng_ratio)
 
                     if idx == len(steps_n) - 1 and rep == mc_reps - 1:
                         last_G, last_pos = G_temp, pos_temp
@@ -227,6 +268,9 @@ def run_simulation(data: dict) -> dict:
                 results_n.append(n_count)
                 results_path.append(float(np.mean(temp_path)))
                 results_diam.append(float(np.mean(temp_diam)))
+                results_clustering.append(float(np.mean(temp_clustering)))
+                results_mean_degree.append(float(np.mean(temp_mean_degree)))
+                results_ng_ratio.append(float(np.mean(temp_ng_ratio)))
 
             # SBQI: logarithmic fit l ~ ln(N) — small-world (PRX Quantum 2021)
             # OFBQI: power law fit l ~ N^alpha — no small-world (PRL 2020)
@@ -238,21 +282,24 @@ def run_simulation(data: dict) -> dict:
                 fit_params_diam = _fit_powerlaw(results_n, results_diam, real_density)
 
             return {
-                "success":         True,
-                "mode":            "evolution",
-                "G":               last_G,
-                "pos":             last_pos,
-                "x_nodes":         results_n,
-                "y_path":          results_path,
-                "y_diameter":      results_diam,
-                "type":            net_type,
-                "final_radius":    final_r_viz,
-                "final_n":         steps_n[-1],
-                "density_val":     real_density,
-                "density_coeff":   density_coeff,
-                "fit_params":      fit_params,
-                "fit_params_diam": fit_params_diam,
-                "seed":            seed,
+                "success":          True,
+                "mode":             "evolution",
+                "G":                last_G,
+                "pos":              last_pos,
+                "x_nodes":          results_n,
+                "y_path":           results_path,
+                "y_diameter":       results_diam,
+                "y_clustering":     results_clustering,
+                "y_mean_degree":    results_mean_degree,
+                "y_ng_ratio":       results_ng_ratio,
+                "type":             net_type,
+                "final_radius":     final_r_viz,
+                "final_n":          steps_n[-1],
+                "density_val":      real_density,
+                "density_coeff":    density_coeff,
+                "fit_params":       fit_params,
+                "fit_params_diam":  fit_params_diam,
+                "seed":             seed,
             }
 
     except Exception as e:
