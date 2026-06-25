@@ -321,9 +321,9 @@ def run_simulation(data: dict) -> dict:
             # OFBQI: power law fit l = b·N^alpha — no small-world, l ~ sqrt(N) (PRL 2020)
             if net_type == NETWORK_TYPE_SBQI:
                 fit_params      = _fit_logarithmic(results_n, results_path,
-                                                   density=real_density, mean_degree=mean_k_avg)
-                fit_params_diam = _fit_logarithmic(results_n, results_diam,
-                                                   density=real_density, mean_degree=mean_k_avg)
+                                                density=real_density, mean_degree=mean_k_avg)
+                # Diameter uses simple fit — paper's analytic formula is for path length only
+                fit_params_diam = _fit_logarithmic(results_n, results_diam)
             else:
                 fit_params      = _fit_powerlaw(results_n, results_path, real_density)
                 fit_params_diam = _fit_powerlaw(results_n, results_diam, real_density)
