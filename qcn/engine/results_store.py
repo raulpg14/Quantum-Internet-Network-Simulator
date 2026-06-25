@@ -138,14 +138,24 @@ def save_run(result: dict, duration_s: float = 0.0) -> int:
             if fp:
                 fit_type = fp.get("type", "logarithmic")
                 if fit_type == "logarithmic":
-                    conn.execute(
-                        "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
-                        (run_id, "fit_a", float(fp["a"]), None)
-                    )
-                    conn.execute(
-                        "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
-                        (run_id, "fit_b", float(fp["b"]), None)
-                    )
+                    if fp.get("analytic"):
+                        conn.execute(
+                            "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                            (run_id, "fit_c_rho", float(fp["c_rho"]), None)
+                        )
+                        conn.execute(
+                            "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                            (run_id, "fit_mean_degree", float(fp["mean_degree"]), None)
+                        )
+                    else:
+                        conn.execute(
+                            "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                            (run_id, "fit_a", float(fp["a"]), None)
+                        )
+                        conn.execute(
+                            "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                            (run_id, "fit_b", float(fp["b"]), None)
+                        )
                 elif fit_type == "powerlaw":
                     conn.execute(
                         "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
@@ -161,14 +171,24 @@ def save_run(result: dict, duration_s: float = 0.0) -> int:
             if fp_diam:
                 fit_type = fp_diam.get("type", "logarithmic")
                 if fit_type == "logarithmic":
-                    conn.execute(
-                        "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
-                        (run_id, "diam_fit_a", float(fp_diam["a"]), None)
-                    )
-                    conn.execute(
-                        "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
-                        (run_id, "diam_fit_b", float(fp_diam["b"]), None)
-                    )
+                    if fp.get("analytic"):
+                        conn.execute(
+                            "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                            (run_id, "fit_c_rho", float(fp["c_rho"]), None)
+                        )
+                        conn.execute(
+                            "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                            (run_id, "fit_mean_degree", float(fp["mean_degree"]), None)
+                        )
+                    else:
+                        conn.execute(
+                            "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                            (run_id, "fit_a", float(fp["a"]), None)
+                        )
+                        conn.execute(
+                            "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                            (run_id, "fit_b", float(fp["b"]), None)
+                        )
                 elif fit_type == "powerlaw":
                     conn.execute(
                         "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",

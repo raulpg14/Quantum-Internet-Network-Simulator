@@ -28,18 +28,36 @@ def _get_giant_component(G: nx.Graph) -> nx.Graph:
     return G.subgraph(largest_cc)
 
 
-def _compute_path_metrics(G: nx.Graph) -> tuple[float, float]:
+def _compute_path_metrics(G: nx.Graph, approx_samples: int = 0) -> tuple[float, float]:
     """
-    Compute average shortest path length and diameter on a graph.
+    Compute average shortest path length and diameter.
+    If approx_samples > 0 and graph is large, uses sampling for speed.
     Returns (0, 0) if the graph has fewer than 2 nodes.
+
+    Exact method:   O(N²) — use for N < 1000
+    Approx method:  O(approx_samples × N) — use for large N
     """
     if len(G) < 2:
         return 0.0, 0.0
+
+    if approx_samples > 0 and len(G) > approx_samples:
+        nodes    = list(G.nodes())
+        sources  = np.random.choice(nodes, size=approx_samples, replace=False)
+        all_paths = []
+        max_path  = 0
+        for src in sources:
+            lengths = nx.single_source_shortest_path_length(G, src)
+            vals    = list(lengths.values())
+            all_paths.extend(vals)
+            if vals:
+                max_path = max(max_path, max(vals))
+        return float(np.mean(all_paths)), float(max_path)
+
     return nx.average_shortest_path_length(G), nx.diameter(G)
 
 
 def _compute_clustering(G: nx.Graph) -> float:
-    """Compute average clustering coefficient. Returns 0 for graphs with < 2 nodes."""
+    """Compute average clustering coefficient. Returns 0 for graphs with fewer than 2 nodes."""
     if len(G) < 2:
         return 0.0
     return nx.average_clustering(G)
@@ -53,21 +71,43 @@ def _compute_mean_degree(G: nx.Graph) -> float:
     return float(np.mean(degrees))
 
 
-def _fit_logarithmic(x: list, y: list) -> dict | None:
+def _fit_logarithmic(x: list, y: list, density: float = None, mean_degree: float = None) -> dict | None:
     """
-    Fit logarithmic curve l = a*ln(N) + b for SBQI.
-    PRX Quantum 2021: SBQI displays small-world property, l ~ ln(N).
+    Fit logarithmic curve for SBQI path length.
+    If density and mean_degree are provided, uses the paper's exact analytic formula:
+        l = c(ρ) · ln(N) / ln(⟨k⟩/ρ)  where c(ρ) = e^(0.312 · ρ^(-0.182))
+    Otherwise falls back to curve_fit: l = a·ln(N) + b.
+    PRX Quantum 2021 Fig 3(c).
     """
     try:
         x_arr = np.array(x, dtype=float)
         y_arr = np.array(y, dtype=float)
+
+        if density is not None and mean_degree is not None and density > 0 and mean_degree > density:
+            c_rho = np.exp(0.312 * (density ** -0.182))
+            denom = np.log(mean_degree / density)
+            if denom > 0:
+                y_pred   = c_rho * np.log(x_arr) / denom
+                residual = float(np.mean((y_arr - y_pred) ** 2))
+                return {
+                    "type":        "logarithmic",
+                    "analytic":    True,
+                    "c_rho":       float(c_rho),
+                    "density":     float(density),
+                    "mean_degree": float(mean_degree),
+                    "residual":    residual,
+                    "formula":     f"l = {c_rho:.4f} · ln(N) / ln(⟨k⟩/ρ)"
+                }
+
+        # Fallback: simple curve fit
         popt, _ = curve_fit(log_func, x_arr, y_arr)
         sign = "+" if popt[1] >= 0 else "-"
         return {
-            "type":    "logarithmic",
-            "a":       popt[0],
-            "b":       popt[1],
-            "formula": f"l = {popt[0]:.4f} * ln(N) {sign} {abs(popt[1]):.4f}"
+            "type":     "logarithmic",
+            "analytic": False,
+            "a":        popt[0],
+            "b":        popt[1],
+            "formula":  f"l = {popt[0]:.4f} * ln(N) {sign} {abs(popt[1]):.4f}"
         }
     except Exception as e:
         logger.warning("Logarithmic fit failed: %s", e)
@@ -106,13 +146,15 @@ def run_simulation(data: dict) -> dict:
         type        (str)   : network type — 'OFBQI' or 'SBQI'
 
     Optional keys:
-        mc_iter     (int)   : Monte Carlo repetitions (default: DEFAULT_MC_REPS)
-        sim_mode    (str)   : 'Degree Distribution' or 'Evolution (N)'
-        nets_per_mc (int)   : number of N steps in evolution mode
-        rad_incr    (int)   : node increment per step in evolution mode
-        seed        (int)   : random seed for reproducibility
-        stop_event          : threading.Event for cancellation
-        queue               : queue.Queue for progress messages
+        mc_iter             (int)  : Monte Carlo repetitions (default: DEFAULT_MC_REPS)
+        sim_mode            (str)  : 'Degree Distribution' or 'Evolution (N)'
+        nets_per_mc         (int)  : number of N steps in evolution mode
+        rad_incr            (int)  : node increment per step in evolution mode
+        seed                (int)  : random seed for reproducibility
+        approx_path_samples (int)  : if > 0, use approximate path length sampling
+                                     for large graphs (recommended for N > 1000)
+        stop_event                 : threading.Event for cancellation
+        queue                      : queue.Queue for progress messages
     """
     seed = None
     try:
@@ -125,6 +167,7 @@ def run_simulation(data: dict) -> dict:
         sim_mode        = data.get('sim_mode', SIM_MODE_DISTRIBUTION)
         stop_event      = data.get('stop_event', None)
         progress_queue  = data.get('queue', None)
+        approx_samples  = int(data.get('approx_path_samples', 0))
 
         def update_progress(msg: str) -> None:
             if progress_queue:
@@ -139,7 +182,7 @@ def run_simulation(data: dict) -> dict:
         if sim_mode == SIM_MODE_DISTRIBUTION:
             radius = input_param_val
             last_G, last_pos, last_degrees = None, None, []
-            clustering_vals = []
+            clustering_vals  = []
             mean_degree_vals = []
 
             for rep in range(mc_reps):
@@ -151,17 +194,16 @@ def run_simulation(data: dict) -> dict:
                 net.add_nodes(input_nodes_val, radius, seed=seed)
                 net.connect_nodes(net_type)
 
-                raw_degrees = [node.connections for node in net.nodes.values()]
+                raw_degrees      = [node.connections for node in net.nodes.values()]
                 G_temp, pos_temp = net.to_networkx()
 
-                # Compute per-rep metrics on giant component
                 G_calc = _get_giant_component(G_temp)
                 clustering_vals.append(_compute_clustering(G_calc))
                 mean_degree_vals.append(_compute_mean_degree(G_temp))
 
                 if rep == mc_reps - 1:
                     last_G, last_pos = G_temp, pos_temp
-                    last_degrees = raw_degrees
+                    last_degrees     = raw_degrees
 
             if last_degrees:
                 counts, bins = np.histogram(
@@ -172,25 +214,25 @@ def run_simulation(data: dict) -> dict:
             else:
                 dist_x, dist_y = [], []
 
-            final_area   = np.pi * (radius ** 2)
-            density_val  = input_nodes_val / final_area if final_area > 0 else 0.0
-            ng_ratio     = len(_get_giant_component(last_G)) / len(last_G) if last_G else 0.0
+            final_area  = np.pi * (radius ** 2)
+            density_val = input_nodes_val / final_area if final_area > 0 else 0.0
+            ng_ratio    = len(_get_giant_component(last_G)) / len(last_G) if last_G else 0.0
 
             return {
-                "success":       True,
-                "mode":          "distribution",
-                "G":             last_G,
-                "pos":           last_pos,
-                "dist_x":        dist_x,
-                "dist_y":        dist_y,
-                "type":          net_type,
-                "final_radius":  radius,
-                "final_n":       input_nodes_val,
-                "density_val":   density_val,
-                "mean_degree":   float(np.mean(mean_degree_vals)),
-                "clustering":    float(np.mean(clustering_vals)),
-                "ng_ratio":      ng_ratio,
-                "seed":          seed,
+                "success":      True,
+                "mode":         "distribution",
+                "G":            last_G,
+                "pos":          last_pos,
+                "dist_x":       dist_x,
+                "dist_y":       dist_y,
+                "type":         net_type,
+                "final_radius": radius,
+                "final_n":      input_nodes_val,
+                "density_val":  density_val,
+                "mean_degree":  float(np.mean(mean_degree_vals)),
+                "clustering":   float(np.mean(clustering_vals)),
+                "ng_ratio":     ng_ratio,
+                "seed":         seed,
             }
 
         # =========================================================
@@ -248,7 +290,7 @@ def run_simulation(data: dict) -> dict:
 
                     if len(G_temp) > 0:
                         G_calc   = _get_giant_component(G_temp)
-                        l, d     = _compute_path_metrics(G_calc)
+                        l, d     = _compute_path_metrics(G_calc, approx_samples=approx_samples)
                         c        = _compute_clustering(G_calc)
                         k_mean   = _compute_mean_degree(G_temp)
                         ng_ratio = len(G_calc) / len(G_temp)
@@ -263,7 +305,7 @@ def run_simulation(data: dict) -> dict:
 
                     if idx == len(steps_n) - 1 and rep == mc_reps - 1:
                         last_G, last_pos = G_temp, pos_temp
-                        final_r_viz = dynamic_radius
+                        final_r_viz      = dynamic_radius
 
                 results_n.append(n_count)
                 results_path.append(float(np.mean(temp_path)))
@@ -272,34 +314,39 @@ def run_simulation(data: dict) -> dict:
                 results_mean_degree.append(float(np.mean(temp_mean_degree)))
                 results_ng_ratio.append(float(np.mean(temp_ng_ratio)))
 
-            # SBQI: logarithmic fit l ~ ln(N) — small-world (PRX Quantum 2021)
-            # OFBQI: power law fit l ~ N^alpha — no small-world (PRL 2020)
+            # Mean degree averaged across all steps for the analytic formula
+            mean_k_avg = float(np.mean(results_mean_degree)) if results_mean_degree else None
+
+            # SBQI: analytic logarithmic fit l = c(ρ)·ln(N)/ln(⟨k⟩/ρ) — small-world (PRX Quantum 2021)
+            # OFBQI: power law fit l = b·N^alpha — no small-world, l ~ sqrt(N) (PRL 2020)
             if net_type == NETWORK_TYPE_SBQI:
-                fit_params      = _fit_logarithmic(results_n, results_path)
-                fit_params_diam = _fit_logarithmic(results_n, results_diam)
+                fit_params      = _fit_logarithmic(results_n, results_path,
+                                                   density=real_density, mean_degree=mean_k_avg)
+                fit_params_diam = _fit_logarithmic(results_n, results_diam,
+                                                   density=real_density, mean_degree=mean_k_avg)
             else:
                 fit_params      = _fit_powerlaw(results_n, results_path, real_density)
                 fit_params_diam = _fit_powerlaw(results_n, results_diam, real_density)
 
             return {
-                "success":          True,
-                "mode":             "evolution",
-                "G":                last_G,
-                "pos":              last_pos,
-                "x_nodes":          results_n,
-                "y_path":           results_path,
-                "y_diameter":       results_diam,
-                "y_clustering":     results_clustering,
-                "y_mean_degree":    results_mean_degree,
-                "y_ng_ratio":       results_ng_ratio,
-                "type":             net_type,
-                "final_radius":     final_r_viz,
-                "final_n":          steps_n[-1],
-                "density_val":      real_density,
-                "density_coeff":    density_coeff,
-                "fit_params":       fit_params,
-                "fit_params_diam":  fit_params_diam,
-                "seed":             seed,
+                "success":         True,
+                "mode":            "evolution",
+                "G":               last_G,
+                "pos":             last_pos,
+                "x_nodes":         results_n,
+                "y_path":          results_path,
+                "y_diameter":      results_diam,
+                "y_clustering":    results_clustering,
+                "y_mean_degree":   results_mean_degree,
+                "y_ng_ratio":      results_ng_ratio,
+                "type":            net_type,
+                "final_radius":    final_r_viz,
+                "final_n":         steps_n[-1],
+                "density_val":     real_density,
+                "density_coeff":   density_coeff,
+                "fit_params":      fit_params,
+                "fit_params_diam": fit_params_diam,
+                "seed":            seed,
             }
 
     except Exception as e:
