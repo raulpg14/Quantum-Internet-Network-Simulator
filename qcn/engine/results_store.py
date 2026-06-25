@@ -104,14 +104,25 @@ def save_run(result: dict, duration_s: float = 0.0) -> int:
 
             fp = result.get("fit_params")
             if fp:
-                conn.execute(
-                    "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
-                    (run_id, "fit_a", float(fp["a"]), None)
-                )
-                conn.execute(
-                    "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
-                    (run_id, "fit_b", float(fp["b"]), None)
-                )
+                fit_type = fp.get("type", "logarithmic")
+                if fit_type == "logarithmic":
+                    conn.execute(
+                        "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                        (run_id, "fit_a", float(fp["a"]), None)
+                    )
+                    conn.execute(
+                        "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                        (run_id, "fit_b", float(fp["b"]), None)
+                    )
+                elif fit_type == "powerlaw":
+                    conn.execute(
+                        "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                        (run_id, "fit_b", float(fp["b"]), None)
+                    )
+                    conn.execute(
+                        "INSERT INTO metrics (run_id, metric, value, step_n) VALUES (?, ?, ?, ?)",
+                        (run_id, "fit_alpha", float(fp["alpha"]), None)
+                    )
 
         conn.commit()
     logger.info("Run saved: id=%d type=%s mode=%s", run_id, result.get("type"), mode)

@@ -3,6 +3,7 @@ import networkx as nx
 import logging
 from scipy.optimize import curve_fit
 
+
 from qcn.engine.network import Network
 from qcn.engine.config import (
     DEFAULT_FALLBACK_RADIUS,
@@ -14,6 +15,8 @@ from qcn.engine.config import (
     SIM_MODE_EVOLUTION,
     NETWORK_TYPE_SBQI,
 )
+
+from qcn.engine.math_util import log_normal_fit, poisson_fit, log_func, power_func
 
 logger = logging.getLogger(__name__)
 
@@ -35,17 +38,6 @@ def _compute_path_metrics(G: nx.Graph) -> tuple[float, float]:
         return 0.0, 0.0
     return nx.average_shortest_path_length(G), nx.diameter(G)
 
-
-def _log_func(x: np.ndarray, a: float, b: float) -> np.ndarray:
-    """Logarithmic model for SBQI: l = a * ln(N) + b"""
-    return a * np.log(x) + b
-
-
-def _power_func(x: np.ndarray, b: float, alpha: float) -> np.ndarray:
-    """Power law model for OFBQI: l = b * N^alpha (PRL 2020)"""
-    return b * np.power(x, alpha)
-
-
 def _fit_logarithmic(x: list, y: list) -> dict | None:
     """
     Fit logarithmic curve l = a*ln(N) + b for SBQI.
@@ -54,7 +46,7 @@ def _fit_logarithmic(x: list, y: list) -> dict | None:
     try:
         x_arr = np.array(x, dtype=float)
         y_arr = np.array(y, dtype=float)
-        popt, _ = curve_fit(_log_func, x_arr, y_arr)
+        popt, _ = curve_fit(log_func, x_arr, y_arr)
         sign = "+" if popt[1] >= 0 else "-"
         return {
             "type":    "logarithmic",
@@ -75,7 +67,7 @@ def _fit_powerlaw(x: list, y: list, density: float) -> dict | None:
     try:
         x_arr = np.array(x, dtype=float)
         y_arr = np.array(y, dtype=float)
-        popt, _ = curve_fit(_power_func, x_arr, y_arr, p0=[5e-5, 0.5])
+        popt, _ = curve_fit(power_func, x_arr, y_arr, p0=[5e-5, 0.5])
         return {
             "type":    "powerlaw",
             "b":       popt[0],
@@ -239,25 +231,28 @@ def run_simulation(data: dict) -> dict:
             # SBQI: logarithmic fit l ~ ln(N) — small-world (PRX Quantum 2021)
             # OFBQI: power law fit l ~ N^alpha — no small-world (PRL 2020)
             if net_type == NETWORK_TYPE_SBQI:
-                fit_params = _fit_logarithmic(results_n, results_path)
+                fit_params      = _fit_logarithmic(results_n, results_path)
+                fit_params_diam = _fit_logarithmic(results_n, results_diam)
             else:
-                fit_params = _fit_powerlaw(results_n, results_path, real_density)
+                fit_params      = _fit_powerlaw(results_n, results_path, real_density)
+                fit_params_diam = _fit_powerlaw(results_n, results_diam, real_density)
 
             return {
-                "success":        True,
-                "mode":           "evolution",
-                "G":              last_G,
-                "pos":            last_pos,
-                "x_nodes":        results_n,
-                "y_path":         results_path,
-                "y_diameter":     results_diam,
-                "type":           net_type,
-                "final_radius":   final_r_viz,
-                "final_n":        steps_n[-1],
-                "density_val":    real_density,
-                "density_coeff":  density_coeff,
-                "fit_params":     fit_params,
-                "seed":           seed,
+                "success":         True,
+                "mode":            "evolution",
+                "G":               last_G,
+                "pos":             last_pos,
+                "x_nodes":         results_n,
+                "y_path":          results_path,
+                "y_diameter":      results_diam,
+                "type":            net_type,
+                "final_radius":    final_r_viz,
+                "final_n":         steps_n[-1],
+                "density_val":     real_density,
+                "density_coeff":   density_coeff,
+                "fit_params":      fit_params,
+                "fit_params_diam": fit_params_diam,
+                "seed":            seed,
             }
 
     except Exception as e:

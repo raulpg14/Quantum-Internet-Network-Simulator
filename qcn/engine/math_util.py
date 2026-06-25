@@ -110,3 +110,12 @@ def photonic_optic_fiber_connection_probability_vec(coords_i: np.ndarray, coords
     d = np.linalg.norm(coords_j - coords_i, axis=1)
     p1 = 10 ** ((-PHOTONIC_ATTENUATION_COEFF * d) / PHOTONIC_ATTENUATION_DIVISOR)
     return 1 - np.power(1 - p1, PHOTONIC_N_TRIALS)
+
+def log_func(x: np.ndarray, a: float, b: float) -> np.ndarray:
+    """Logarithmic model for SBQI: l = a * ln(N) + b"""
+    return a * np.log(x) + b
+
+
+def power_func(x: np.ndarray, b: float, alpha: float) -> np.ndarray:
+    """Power law model for OFBQI: l = b * N^alpha (PRL 2020)"""
+    return b * np.power(x, alpha)
